@@ -148,6 +148,18 @@ button { font: inherit; }
 }
 .step-id { font-family: Consolas, monospace; }
 .issue-badge { margin-left: auto; color: #9a6410; background: #fff2cf; }
+.tag.is-questioned { color: #a02a38; background: #ffe3e7; }
+.tag.is-review { color: #8a5a0d; background: #fff0cd; }
+.step-card.is-questioned { border-left: 3px solid #d65d69; }
+.step-card.is-review { border-left: 3px solid #e0a93e; }
+.goal-card.has-issue { border-left-color: #c93d4c; }
+.goal-warning { grid-column: 1 / -1; margin: 2px 0 0; padding: 7px 10px; border-radius: 7px; color: #8f2532; background: #fff0f2; font-size: 11px; }
+.inspector-status { margin-top: 10px; padding: 7px 9px; border-radius: 7px; font-size: 11px; line-height: 1.5; }
+.inspector-status.questioned { color: #8f2532; background: #fff0f2; }
+.inspector-status.review { color: #875b13; background: #fff7e5; }
+.branch-toggle { display: flex; align-items: center; gap: 6px; margin-top: 6px; color: #4a5a6d; font-size: 11px; cursor: pointer; }
+.branch-toggle input { accent-color: var(--blue); }
+.branch-hint { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .step-menu { border: 0; color: #9aa4af; background: transparent; font-size: 17px; cursor: pointer; }
 .step-statement { margin: 12px 2px 10px; font: 18px/1.6 "Times New Roman", "Noto Serif SC", serif; overflow-x: auto; }
 .step-footer { display: flex; flex-wrap: wrap; gap: 8px; color: var(--muted); font-size: 10px; }

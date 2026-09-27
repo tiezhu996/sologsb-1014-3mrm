@@ -1,5 +1,6 @@
 export type StepType = 'premise' | 'derivation' | 'goal';
 export type CheckSeverity = 'error' | 'warning' | 'info';
+export type StepStatus = 'questioned' | 'review';
 
 export interface ProofStep {
   id: string;
@@ -10,6 +11,7 @@ export interface ProofStep {
   note: string;
   counterexample: string;
   alternative: string;
+  alternativeEnabled: boolean;
 }
 
 export interface ProofVersion {

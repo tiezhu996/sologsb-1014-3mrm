@@ -1,7 +1,7 @@
 import m, { type Component } from 'mithril';
 import katex from 'katex';
-import { compareVersion, ProofStore, RULES } from './store';
-import type { ProofDocument, ProofStep } from './types';
+import { compareVersion, computeStepStatuses, isAlternativeActive, ProofStore, RULES, validate } from './store';
+import type { ProofCheck, ProofDocument, ProofStep } from './types';
 
 const store = new ProofStore();
 
@@ -53,18 +53,31 @@ function download(name: string, content: string, mime: string): void {
   URL.revokeObjectURL(link.href);
 }
 
+function proofStatusText(checks: ProofCheck[]): string {
+  const errors = checks.filter((check) => check.severity === 'error').length;
+  const warnings = checks.filter((check) => check.severity === 'warning').length;
+  if (errors) return '尚未证出（存在待处理错误）';
+  if (warnings) return '结构有效，仍有待核对项';
+  return '结构检查通过';
+}
+
 function exportMarkdown(document: ProofDocument): string {
-  const lines = [`# ${document.title}`, '', `**证明目标：** $${document.goal}$`, ''];
+  const checks = validate(document);
+  const { statuses } = computeStepStatuses(document);
+  const lines = [`# ${document.title}`, '', `**证明目标：** $${document.goal}$`, '', `**证明状态：** ${proofStatusText(checks)}`, ''];
   document.steps.forEach((step, index) => {
     const refs = step.references.map((id) => `步骤 ${document.steps.findIndex((item) => item.id === id) + 1}`).filter((ref) => ref !== '步骤 0');
+    const status = statuses.get(step.id);
     lines.push(`## ${index + 1}. ${step.statement}`);
     lines.push('');
     lines.push(`- 类型：${typeLabel[step.type]}`);
     lines.push(`- 推理规则：${step.rule}`);
+    if (status === 'questioned') lines.push('- 状态：受质疑（附反例，该步推理暂不成立）');
+    if (status === 'review') lines.push('- 状态：待复核（依赖受质疑的步骤）');
     if (refs.length) lines.push(`- 依据：${refs.join('、')}`);
     if (step.note) lines.push(`- 旁注：${step.note}`);
     if (step.counterexample) lines.push(`- 反例：${step.counterexample}`);
-    if (step.alternative) lines.push(`- 替代分支：${step.alternative}`);
+    if (step.alternative) lines.push(`- 替代分支（${isAlternativeActive(step) ? '已启用，按此判定' : '备选，未启用'}）：${step.alternative}`);
     lines.push('');
   });
   lines.push('## 符号表');
@@ -73,11 +86,15 @@ function exportMarkdown(document: ProofDocument): string {
 }
 
 function exportLatex(document: ProofDocument): string {
-  const lines = ['\\documentclass{article}', '\\usepackage{amsmath,amssymb}', '\\begin{document}', `\\section*{${document.title}}`, `\\textbf{证明目标：} $${document.goal}$`, '\\begin{enumerate}'];
+  const checks = validate(document);
+  const { statuses } = computeStepStatuses(document);
+  const lines = ['\\documentclass{article}', '\\usepackage{amsmath,amssymb}', '\\begin{document}', `\\section*{${document.title}}`, `\\textbf{证明目标：} $${document.goal}$`, `\\textbf{证明状态：} ${proofStatusText(checks)}`, '\\begin{enumerate}'];
   document.steps.forEach((step) => {
     const refs = step.references.map((id) => document.steps.findIndex((item) => item.id === id) + 1).filter(Boolean);
     const support = refs.length ? `（依据 ${refs.join(', ')}；${step.rule}）` : `（${step.rule}）`;
-    lines.push(`  \\item ${step.statement} ${support}`);
+    const status = statuses.get(step.id);
+    const marker = status === 'questioned' ? '【受质疑】' : status === 'review' ? '【待复核】' : '';
+    lines.push(`  \\item ${step.statement} ${support}${marker}`);
     if (step.note) lines.push(`  \\par\\small 旁注：${step.note}`);
   });
   lines.push('\\end{enumerate}', '\\end{document}');
@@ -143,10 +160,13 @@ export class ProofApp implements Component {
     const document = store.current;
     const selected = store.selectedStep;
     const checks = store.checks;
+    const { statuses } = computeStepStatuses(document);
     const errors = checks.filter((check) => check.severity === 'error').length;
     const warnings = checks.filter((check) => check.severity === 'warning').length;
     const selectedVersion = document.versions.find((version) => version.id === store.compareVersionId);
     const diff = selectedVersion ? compareVersion(document, selectedVersion) : [];
+    const goalCheck = checks.find((check) => check.id === 'goal-questioned');
+    const selectedStatus = selected ? statuses.get(selected.id) : undefined;
 
     return m('div.app-shell', [
       m('header.topbar', [
@@ -213,7 +233,7 @@ export class ProofApp implements Component {
               m('button.button.is-small', { onclick: () => download(`${document.title}.tex`, exportLatex(document), 'application/x-tex;charset=utf-8') }, '导出 LaTeX'),
             ]),
           ]),
-          m('section.goal-card', [
+          m('section.goal-card', { class: goalCheck ? 'has-issue' : '' }, [
             m('div.goal-label', '证明目标'),
             m('div.goal-formula', renderRichText(`$${document.goal}$`)),
             m('input.formula-input', {
@@ -222,6 +242,7 @@ export class ProofApp implements Component {
               oninput: (event: Event) => store.update((item) => { item.goal = (event.target as HTMLInputElement).value; }),
               'aria-label': '证明目标',
             }),
+            goalCheck && m('p.goal-warning', goalCheck.detail),
           ]),
           m('div.steps-toolbar', [
             m('div', [m('strong', '证明步骤'), m('span.steps-count', `${document.steps.length} 步`)]),
@@ -233,9 +254,10 @@ export class ProofApp implements Component {
           ]),
           m('div.steps-list', document.steps.length === 0 && m('div.empty-state', '尚无步骤。按 Ctrl+Enter 开始添加。'), document.steps.map((step, index) => {
             const stepChecks = checks.filter((check) => check.stepId === step.id);
+            const status = statuses.get(step.id);
             return m('article.step-card', {
               'data-step': step.id,
-              class: step.id === store.selectedStepId ? 'is-selected' : '',
+              class: [step.id === store.selectedStepId ? 'is-selected' : '', status ? `is-${status}` : ''].filter(Boolean).join(' '),
               draggable: true,
               onclick: () => { store.selectStep(step.id); m.redraw(); },
               ondragstart: () => { store.dragStepId = step.id; },
@@ -251,6 +273,8 @@ export class ProofApp implements Component {
                   m('span.tag', { class: step.type === 'goal' ? 'is-success' : step.type === 'premise' ? 'is-info' : 'is-light' }, typeLabel[step.type]),
                   m('span.rule-chip', step.rule),
                   m('span.step-id', `#${shortId(step.id)}`),
+                  status === 'questioned' && m('span.tag.is-questioned', '受质疑'),
+                  status === 'review' && m('span.tag.is-review', '待复核'),
                   stepChecks.length > 0 && m('span.issue-badge', `${stepChecks.length} 项检查`),
                   m('button.step-menu', { onclick: (event: Event) => { event.stopPropagation(); store.removeStep(step.id); m.redraw(); }, title: '删除步骤' }, '×'),
                 ]),
@@ -262,7 +286,7 @@ export class ProofApp implements Component {
                   }).join('、')}` : '独立前提'),
                   step.note && m('span.has-note', '含旁注'),
                   step.counterexample && m('span.has-counterexample', '含反例'),
-                  step.alternative && m('span.has-branch', '含替代分支'),
+                  step.alternative && m('span.has-branch', isAlternativeActive(step) ? '替代分支已启用' : '含替代分支'),
                 ]),
               ]),
             ]);
@@ -271,6 +295,9 @@ export class ProofApp implements Component {
         m('aside.right-rail', [
           selected ? m('section.panel.inspector', [
             m('div.panel-heading', [m('span', '步骤检查器'), m('span.inspector-step', `#${shortId(selected.id)}`)]),
+            selectedStatus && m('p.inspector-status', { class: selectedStatus }, selectedStatus === 'questioned'
+              ? '此步骤受质疑：反例使该步推理暂不成立，修正该步或启用替代分支后重新判定。'
+              : '此步骤待复核：其依据链中包含受质疑的步骤。'),
             m('label.field-label', '步骤类型'),
             m('div.select.is-fullwidth', m('select', { value: selected.type, onchange: (event: Event) => store.updateStep({ type: (event.target as HTMLSelectElement).value as ProofStep['type'] }) }, Object.entries(typeLabel).map(([value, label]) => m('option', { value }, label)))),
             m('label.field-label', '推理规则'),
@@ -317,7 +344,24 @@ export class ProofApp implements Component {
             m('div.field-grid', [
               m('div', [m('label.field-label', '旁注'), m('textarea.textarea.is-small', { rows: 2, value: selected.note, placeholder: '记录思路或条件', oninput: (event: Event) => store.updateStep({ note: (event.target as HTMLTextAreaElement).value }) })]),
               m('div', [m('label.field-label', '反例 / 边界情况'), m('textarea.textarea.is-small', { rows: 2, value: selected.counterexample, placeholder: '尝试寻找反例', oninput: (event: Event) => store.updateStep({ counterexample: (event.target as HTMLTextAreaElement).value }) })]),
-              m('div', [m('label.field-label', '替代分支'), m('textarea.textarea.is-small', { rows: 2, value: selected.alternative, placeholder: '另一种可行推导', oninput: (event: Event) => store.updateStep({ alternative: (event.target as HTMLTextAreaElement).value }) })]),
+              m('div', [
+                m('label.field-label', '替代分支'),
+                m('textarea.textarea.is-small', { rows: 2, value: selected.alternative, placeholder: '另一种可行推导', oninput: (event: Event) => store.updateStep({ alternative: (event.target as HTMLTextAreaElement).value }) }),
+                m('label.branch-toggle', [
+                  m('input', {
+                    type: 'checkbox',
+                    checked: isAlternativeActive(selected),
+                    disabled: !selected.alternative.trim(),
+                    onchange: (event: Event) => store.updateStep({ alternativeEnabled: (event.target as HTMLInputElement).checked }),
+                  }),
+                  m('span', '启用此分支，按它重新判定'),
+                ]),
+                m('small.branch-hint', !selected.alternative.trim()
+                  ? '填写替代分支后可启用；未启用的分支仅作备选，不参与检查。'
+                  : isAlternativeActive(selected)
+                    ? '已启用：按该分支重新判定，受质疑与下游待复核一并解除。'
+                    : '未启用：仅作备选，不参与检查。'),
+              ]),
             ]),
             m('button.button.is-small.is-white.is-fullwidth.add-symbol', {
               onclick: () => {
