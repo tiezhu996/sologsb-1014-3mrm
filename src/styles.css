@@ -137,6 +137,8 @@ button { font: inherit; }
 }
 .step-card:hover { border-color: #b9cad8; box-shadow: 0 8px 20px rgba(35,62,86,.08); }
 .step-card.is-selected { border-color: #5d96c3; box-shadow: 0 0 0 2px rgba(46,115,167,.11), 0 8px 22px rgba(35,62,86,.08); }
+.step-card.is-questioned { border-left: 3px solid var(--red); }
+.step-card.is-pending { border-left: 3px solid #d9a514; }
 .step-rail { padding: 12px 8px; display: flex; flex-direction: column; align-items: center; gap: 10px; background: #f5f8fb; border-right: 1px solid #e7edf2; }
 .drag-handle { color: #9ba8b7; cursor: grab; font-size: 17px; user-select: none; }
 .step-number { color: #627187; font: 700 11px Georgia, serif; }
@@ -153,6 +155,12 @@ button { font: inherit; }
 .step-footer { display: flex; flex-wrap: wrap; gap: 8px; color: var(--muted); font-size: 10px; }
 .has-note, .has-branch { color: #2975ab; }
 .has-counterexample { color: #a56513; }
+.status-questioned, .status-pending { padding: 1px 6px; border-radius: 5px; font-weight: 700; }
+.status-questioned { color: var(--red); background: #fdecef; }
+.status-pending { color: #9a6a10; background: #fff3d6; }
+.alt-toggle { display: flex; align-items: center; gap: 6px; margin-top: 6px; color: #475568; font-size: 10px; cursor: pointer; }
+.alt-toggle.is-disabled { opacity: .55; cursor: not-allowed; }
+.alt-hint { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .empty-state { padding: 60px; text-align: center; color: var(--muted); background: #fff; border: 1px dashed var(--line); border-radius: 14px; }
 .inspector { max-height: calc(100vh - 102px); overflow-y: auto; padding-bottom: 12px; }
 .inspector > *:not(.panel-heading) { margin-left: 12px; margin-right: 12px; }

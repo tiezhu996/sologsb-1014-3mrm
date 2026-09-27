@@ -10,6 +10,8 @@ export interface ProofStep {
   note: string;
   counterexample: string;
   alternative: string;
+  alternativeReferences: string[];
+  alternativeEnabled: boolean;
 }
 
 export interface ProofVersion {
@@ -37,6 +39,11 @@ export interface ProofCheck {
   title: string;
   detail: string;
   stepId?: string;
+}
+
+export interface StepReview {
+  questioned: boolean;
+  pendingFrom: string[];
 }
 
 export interface ProofDiff {

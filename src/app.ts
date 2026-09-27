@@ -1,7 +1,7 @@
 import m, { type Component } from 'mithril';
 import katex from 'katex';
-import { compareVersion, ProofStore, RULES } from './store';
-import type { ProofDocument, ProofStep } from './types';
+import { compareVersion, ProofStore, reviewSteps, RULES, useAlternativeBranch } from './store';
+import type { ProofDocument, ProofStep, StepReview } from './types';
 
 const store = new ProofStore();
 
@@ -53,18 +53,34 @@ function download(name: string, content: string, mime: string): void {
   URL.revokeObjectURL(link.href);
 }
 
-function exportMarkdown(document: ProofDocument): string {
+function stepLabels(document: ProofDocument, ids: string[]): string {
+  return ids.map((id) => `步骤 ${document.steps.findIndex((item) => item.id === id) + 1}`).filter((label) => label !== '步骤 0').join('、');
+}
+
+function exportMarkdown(document: ProofDocument, review: Map<string, StepReview>): string {
   const lines = [`# ${document.title}`, '', `**证明目标：** $${document.goal}$`, ''];
+  const goalStep = document.steps.find((step) => step.type === 'goal' && step.rule === '结论');
+  const goalReview = goalStep ? review.get(goalStep.id) : undefined;
+  if (goalStep && (goalReview?.questioned || (goalReview && goalReview.pendingFrom.length > 0))) {
+    lines.push('> ⚠️ 检查结论：目标还没证出来——结论架在受质疑的步骤上。', '');
+  }
   document.steps.forEach((step, index) => {
-    const refs = step.references.map((id) => `步骤 ${document.steps.findIndex((item) => item.id === id) + 1}`).filter((ref) => ref !== '步骤 0');
+    const status = review.get(step.id);
+    const useAlternative = useAlternativeBranch(step);
+    const refs = stepLabels(document, useAlternative ? step.alternativeReferences : step.references);
     lines.push(`## ${index + 1}. ${step.statement}`);
     lines.push('');
     lines.push(`- 类型：${typeLabel[step.type]}`);
     lines.push(`- 推理规则：${step.rule}`);
-    if (refs.length) lines.push(`- 依据：${refs.join('、')}`);
+    if (refs) lines.push(`- 依据：${refs}`);
+    if (status?.questioned) lines.push('- 检查状态：受质疑（该步写有反例，暂未通过检查）');
+    else if (status && status.pendingFrom.length) lines.push(`- 检查状态：待复核（推导链经过受质疑的${stepLabels(document, status.pendingFrom)}）`);
     if (step.note) lines.push(`- 旁注：${step.note}`);
     if (step.counterexample) lines.push(`- 反例：${step.counterexample}`);
-    if (step.alternative) lines.push(`- 替代分支：${step.alternative}`);
+    if (step.alternative) {
+      const altRefs = stepLabels(document, step.alternativeReferences);
+      lines.push(`- 替代分支（${useAlternative ? '已启用，按此重新判定' : '备选，未参与检查'}）：${step.alternative}${altRefs ? `（依据：${altRefs}）` : ''}`);
+    }
     lines.push('');
   });
   lines.push('## 符号表');
@@ -72,13 +88,25 @@ function exportMarkdown(document: ProofDocument): string {
   return lines.join('\n');
 }
 
-function exportLatex(document: ProofDocument): string {
-  const lines = ['\\documentclass{article}', '\\usepackage{amsmath,amssymb}', '\\begin{document}', `\\section*{${document.title}}`, `\\textbf{证明目标：} $${document.goal}$`, '\\begin{enumerate}'];
+function exportLatex(document: ProofDocument, review: Map<string, StepReview>): string {
+  const lines = ['\\documentclass{article}', '\\usepackage{amsmath,amssymb}', '\\begin{document}', `\\section*{${document.title}}`, `\\textbf{证明目标：} $${document.goal}$`];
+  const goalStep = document.steps.find((step) => step.type === 'goal' && step.rule === '结论');
+  const goalReview = goalStep ? review.get(goalStep.id) : undefined;
+  if (goalStep && (goalReview?.questioned || (goalReview && goalReview.pendingFrom.length > 0))) {
+    lines.push('\\par\\textbf{检查结论：} 目标还没证出来（结论架在受质疑的步骤上）。');
+  }
+  lines.push('\\begin{enumerate}');
   document.steps.forEach((step) => {
-    const refs = step.references.map((id) => document.steps.findIndex((item) => item.id === id) + 1).filter(Boolean);
+    const status = review.get(step.id);
+    const useAlternative = useAlternativeBranch(step);
+    const refs = (useAlternative ? step.alternativeReferences : step.references).map((id) => document.steps.findIndex((item) => item.id === id) + 1).filter(Boolean);
     const support = refs.length ? `（依据 ${refs.join(', ')}；${step.rule}）` : `（${step.rule}）`;
     lines.push(`  \\item ${step.statement} ${support}`);
+    if (status?.questioned) lines.push('  \\par\\small 状态：受质疑，该步暂未通过检查。');
+    else if (status && status.pendingFrom.length) lines.push('  \\par\\small 状态：待复核，推导链经过受质疑的步骤。');
     if (step.note) lines.push(`  \\par\\small 旁注：${step.note}`);
+    if (step.counterexample) lines.push(`  \\par\\small 反例：${step.counterexample}`);
+    if (step.alternative) lines.push(`  \\par\\small 替代分支（${useAlternative ? '已启用' : '备选'}）：${step.alternative}`);
   });
   lines.push('\\end{enumerate}', '\\end{document}');
   return lines.join('\n');
@@ -143,6 +171,7 @@ export class ProofApp implements Component {
     const document = store.current;
     const selected = store.selectedStep;
     const checks = store.checks;
+    const review = reviewSteps(document);
     const errors = checks.filter((check) => check.severity === 'error').length;
     const warnings = checks.filter((check) => check.severity === 'warning').length;
     const selectedVersion = document.versions.find((version) => version.id === store.compareVersionId);
@@ -209,8 +238,8 @@ export class ProofApp implements Component {
               m('div.editor-meta', [`${document.author} · ${document.steps.length} 个步骤`, m('span.keyboard-hint', '拖动 ⠿ 排序')]),
             ]),
             m('div.export-actions', [
-              m('button.button.is-small', { onclick: () => download(`${document.title}.md`, exportMarkdown(document), 'text/markdown;charset=utf-8') }, '导出 Markdown'),
-              m('button.button.is-small', { onclick: () => download(`${document.title}.tex`, exportLatex(document), 'application/x-tex;charset=utf-8') }, '导出 LaTeX'),
+              m('button.button.is-small', { onclick: () => download(`${document.title}.md`, exportMarkdown(document, review), 'text/markdown;charset=utf-8') }, '导出 Markdown'),
+              m('button.button.is-small', { onclick: () => download(`${document.title}.tex`, exportLatex(document, review), 'application/x-tex;charset=utf-8') }, '导出 LaTeX'),
             ]),
           ]),
           m('section.goal-card', [
@@ -233,9 +262,16 @@ export class ProofApp implements Component {
           ]),
           m('div.steps-list', document.steps.length === 0 && m('div.empty-state', '尚无步骤。按 Ctrl+Enter 开始添加。'), document.steps.map((step, index) => {
             const stepChecks = checks.filter((check) => check.stepId === step.id);
+            const status = review.get(step.id);
+            const pending = !status?.questioned && (status?.pendingFrom.length ?? 0) > 0;
+            const cardClass = [
+              step.id === store.selectedStepId ? 'is-selected' : '',
+              status?.questioned ? 'is-questioned' : '',
+              pending ? 'is-pending' : '',
+            ].filter(Boolean).join(' ');
             return m('article.step-card', {
               'data-step': step.id,
-              class: step.id === store.selectedStepId ? 'is-selected' : '',
+              class: cardClass,
               draggable: true,
               onclick: () => { store.selectStep(step.id); m.redraw(); },
               ondragstart: () => { store.dragStepId = step.id; },
@@ -256,13 +292,15 @@ export class ProofApp implements Component {
                 ]),
                 m('div.step-statement', renderRichText(step.statement)),
                 m('div.step-footer', [
+                  status?.questioned && m('span.status-questioned', '受质疑'),
+                  pending && m('span.status-pending', '待复核'),
                   m('span', step.references.length ? `依据：${step.references.map((reference) => {
                     const referenceIndex = document.steps.findIndex((item) => item.id === reference);
                     return referenceIndex >= 0 ? `步骤 ${referenceIndex + 1}` : `缺失 ${shortId(reference)}`;
                   }).join('、')}` : '独立前提'),
                   step.note && m('span.has-note', '含旁注'),
                   step.counterexample && m('span.has-counterexample', '含反例'),
-                  step.alternative && m('span.has-branch', '含替代分支'),
+                  step.alternative && m('span.has-branch', useAlternativeBranch(step) ? '替代分支已启用' : '含替代分支'),
                 ]),
               ]),
             ]);
@@ -317,7 +355,46 @@ export class ProofApp implements Component {
             m('div.field-grid', [
               m('div', [m('label.field-label', '旁注'), m('textarea.textarea.is-small', { rows: 2, value: selected.note, placeholder: '记录思路或条件', oninput: (event: Event) => store.updateStep({ note: (event.target as HTMLTextAreaElement).value }) })]),
               m('div', [m('label.field-label', '反例 / 边界情况'), m('textarea.textarea.is-small', { rows: 2, value: selected.counterexample, placeholder: '尝试寻找反例', oninput: (event: Event) => store.updateStep({ counterexample: (event.target as HTMLTextAreaElement).value }) })]),
-              m('div', [m('label.field-label', '替代分支'), m('textarea.textarea.is-small', { rows: 2, value: selected.alternative, placeholder: '另一种可行推导', oninput: (event: Event) => store.updateStep({ alternative: (event.target as HTMLTextAreaElement).value }) })]),
+              m('div', [
+                m('label.field-label', '替代分支'),
+                m('textarea.textarea.is-small', {
+                  rows: 2,
+                  value: selected.alternative,
+                  placeholder: '另一种可行推导',
+                  oninput: (event: Event) => {
+                    const value = (event.target as HTMLTextAreaElement).value;
+                    store.updateStep(value.trim() ? { alternative: value } : { alternative: value, alternativeEnabled: false });
+                  },
+                }),
+                m('label.alt-toggle', { class: selected.alternative.trim() ? '' : 'is-disabled' }, [
+                  m('input', {
+                    type: 'checkbox',
+                    checked: useAlternativeBranch(selected),
+                    disabled: !selected.alternative.trim(),
+                    onchange: (event: Event) => store.updateStep({ alternativeEnabled: (event.target as HTMLInputElement).checked }),
+                  }),
+                  m('span', '启用此分支，按它重新判定本步'),
+                ]),
+                selected.alternative.trim() !== '' && m('small.alt-hint', useAlternativeBranch(selected)
+                  ? '已启用：本步按替代分支的引用重新判定，反例带来的受质疑与下游待复核一并解除。'
+                  : '未启用：替代分支仅作备选，不参与检查。'),
+              ]),
+            ]),
+            selected.alternative.trim() !== '' && m('div', [
+              m('label.field-label', '替代分支引用'),
+              m('div.reference-list', document.steps.map((step) => m('label.reference-item', [
+                m('input', {
+                  type: 'checkbox',
+                  checked: selected.alternativeReferences.includes(step.id),
+                  onchange: (event: Event) => {
+                    const checked = (event.target as HTMLInputElement).checked;
+                    const alternativeReferences = checked ? [...selected.alternativeReferences, step.id] : selected.alternativeReferences.filter((id) => id !== step.id);
+                    store.updateStep({ alternativeReferences });
+                  },
+                }),
+                m('span', step.id === selected.id ? '本步' : `步骤 ${document.steps.indexOf(step) + 1}`),
+                m('small', step.statement.replace(/\$/g, '')),
+              ]))),
             ]),
             m('button.button.is-small.is-white.is-fullwidth.add-symbol', {
               onclick: () => {
